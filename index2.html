@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Reloj NFC Fantasma - Corregido</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0b3b3f, #1a2a3a);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+            touch-action: manipulation;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        #welcomeScreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, #0f2027, #203a43);
+            z-index: 20;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            transition: opacity 0.8s ease;
+        }
+        .touch-indicator {
+            animation: pulse 1.5s infinite;
+            background: rgba(255,255,255,0.15);
+            padding: 25px 40px;
+            border-radius: 80px;
+            margin-top: 30px;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.6; box-shadow: 0 0 0 0 rgba(0, 255, 255, 0.4);}
+            70% { transform: scale(1.05); opacity: 1; box-shadow: 0 0 0 20px rgba(0, 255, 255, 0);}
+            100% { transform: scale(1); opacity: 0.6; box-shadow: 0 0 0 0 rgba(0, 255, 255, 0);}
+        }
+        .nfc-icon {
+            font-size: 5rem;
+            margin-bottom: 20px;
+        }
+        .welcome-title {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            text-shadow: 0 0 15px cyan;
+        }
+        .welcome-subtitle {
+            font-size: 1.3rem;
+            margin-bottom: 10px;
+        }
+        .small-note {
+            margin-top: 60px;
+            font-size: 0.8rem;
+            opacity: 0.6;
+        }
+        .reloj {
+            background: rgba(0,0,0,0.7);
+            padding: 1.5rem;
+            border-radius: 2rem;
+            box-shadow: 0 0 30px rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            max-width: 550px;
+            width: 90%;
+            opacity: 0;
+            transform: scale(0.95);
+            transition: all 0.6s ease;
+        }
+        .reloj.visible {
+            opacity: 1;
+            transform: scale(1);
+        }
+        .hora {
+            font-size: 3rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 10px #00ffcc;
+            margin: 15px 0;
+            word-break: break-word;
+        }
+        .estado {
+            margin-top: 15px;
+            background: rgba(0,0,0,0.6);
+            padding: 10px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: bold;
+        }
+        .badge {
+            background: #27ae60;
+            color: black;
+            padding: 4px 10px;
+            border-radius: 30px;
+            display: inline-block;
+            margin-bottom: 10px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+        .info {
+            font-size: 0.7rem;
+            margin-top: 10px;
+            opacity: 0.8;
+        }
+        .fantasma {
+            background: #8e44ad;
+            margin-top: 10px;
+            font-size: 0.65rem;
+        }
+        .warning {
+            background: #e67e22;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="welcomeScreen">
+        <div class="nfc-icon">📱➡️🏷️</div>
+        <div class="welcome-title">Reloj NFC Fantasma</div>
+        <div class="welcome-subtitle">🔓 TOQUE EN CUALQUIER LUGAR</div>
+        <div class="touch-indicator">✨ TOCA LA PANTALLA ✨</div>
+        <div class="small-note">(Solo un toque al abrir - luego dice la hora cada 15 minutos)</div>
+    </div>
+
+    <div class="reloj" id="relojContainer">
+        <div class="badge">🔓 ACTIVADO</div>
+        <h1>🗣️ Reloj Inteligente</h1>
+        <div class="hora" id="horaPantalla">--:--:--</div>
+        <div class="estado" id="estado">🎭 Esperando activación...</div>
+        <div class="info">⏰ Dice la hora CADA 15 MINUTOS (00, 15, 30, 45)</div>
+        <div class="info fantasma" id="fantasmaStatus">🔇 Sonido fantasma: INACTIVO</div>
+        <div class="info warning" id="warningStatus" style="display:none; background:#c0392b;"></div>
+    </div>
+
+    <script>
+        // ========== VARIABLES ==========
+        let vozDesbloqueada = false;
+        let ultimoCuartoHabla = -1;
+        let audioContext = null;
+        let silentSource = null;
+        let sonidoFantasmaActivo = false;
+        let wakeLockSentinel = null;
+        let keepAliveInterval = null;
+        
+        const welcomeDiv = document.getElementById('welcomeScreen');
+        const relojDiv = document.getElementById('relojContainer');
+        const horaPantalla = document.getElementById('horaPantalla');
+        const estadoDiv = document.getElementById('estado');
+        const fantasmaStatus = document.getElementById('fantasmaStatus');
+        const warningStatus = document.getElementById('warningStatus');
+        
+        // ========== FUNCIONES DEL RELOJ ==========
+        function formatearHoraPantalla(date) {
+            return date.toLocaleTimeString('es-ES', { hour12: false });
+        }
+        
+        function obtenerTextoHora() {
+            const ahora = new Date();
+            let horas = ahora.getHours();
+            let minutos = ahora.getMinutes();
+            
+            let hora12 = horas % 12;
+            if (hora12 === 0) hora12 = 12;
+            
+            if (minutos === 0) {
+                return `${hora12} en punto`;
+            } else if (minutos === 15) {
+                return `${hora12} y cuarto`;
+            } else if (minutos === 30) {
+                return `${hora12} y media`;
+            } else if (minutos === 45) {
+                let siguienteHora = (horas + 1) % 12;
+                if (siguienteHora === 0) siguienteHora = 12;
+                return `un cuarto para las ${siguienteHora}`;
+            } else {
+                return `${hora12} y ${minutos} minutos`;
+            }
+        }
+        
+        function decirHora() {
+            if (!vozDesbloqueada) return;
+            if (!('speechSynthesis' in window)) return;
+            
+            const textoHora = obtenerTextoHora();
+            
+            // Limpiar voces anteriores
+            window.speechSynthesis.cancel();
+            
+            const utterance = new SpeechSynthesisUtterance(textoHora);
+            utterance.lang = 'es-ES';
+            utterance.rate = 0.9;
+            utterance.pitch = 1;
+            
+            estadoDiv.innerText = `🗣️ "${textoHora}"`;
+            
+            utterance.onend = () => {
+                setTimeout(() => {
+                    if (estadoDiv.innerText.includes(textoHora)) {
+                        estadoDiv.innerText = "✅ Próxima hora en 15 minutos";
+                    }
+                }, 2000);
+            };
+            
+            window.speechSynthesis.speak(utterance);
+        }
+        
+        // ========== KEEP ALIVE - Múltiples estrategias ==========
+        
+        // Estrategia 1: Wake Lock API (mantiene pantalla despierta)
+        async function solicitarWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLockSentinel = await navigator.wakeLock.request('screen');
+                    wakeLockSentinel.addEventListener('release', () => {
+                        console.log('Wake Lock liberado');
+                    });
+                    return true;
+                } catch (err) {
+                    console.log('Wake Lock error:', err);
+                    return false;
+                }
+            }
+            return false;
+        }
+        
+        // Estrategia 2: Audio silencioso (más agresivo)
+        function iniciarSonidoFantasma() {
+            if (sonidoFantasmaActivo) return;
+            if (!vozDesbloqueada) return;
+            
+            try {
+                // Crear contexto de audio
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                
+                // Crear buffer de silencio (onda sinusoidal a volumen 0)
+                const sampleRate = audioContext.sampleRate;
+                const bufferSize = sampleRate * 4; // 4 segundos
+                const buffer = audioContext.createBuffer(1, bufferSize, sampleRate);
+                const data = buffer.getChannelData(0);
+                
+                // Silencio absoluto
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = 0;
+                }
+                
+                // Crear fuente y loop
+                silentSource = audioContext.createBufferSource();
+                silentSource.buffer = buffer;
+                silentSource.loop = true;
+                silentSource.connect(audioContext.destination);
+                silentSource.start();
+                
+                // IMPORTANTE: El contexto debe estar 'running'
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume().then(() => {
+                        console.log('AudioContext reanudado');
+                    });
+                }
+                
+                sonidoFantasmaActivo = true;
+                fantasmaStatus.innerHTML = "👻 SONIDO FANTASMA ACTIVO ✅ (pantalla puede apagarse)";
+                fantasmaStatus.style.background = "#27ae60";
+                
+                console.log("✅ Sonido fantasma activado");
+                
+            } catch (error) {
+                console.error("Error sonido fantasma:", error);
+                fantasmaStatus.innerHTML = "⚠️ Modo fantasma no disponible en este navegador";
+                fantasmaStatus.style.background = "#c0392b";
+            }
+        }
+        
+        // Estrategia 3: Keep-alive con pings (evita que el navegador se duerma)
+        function iniciarKeepAlive() {
+            if (keepAliveInterval) clearInterval(keepAliveInterval);
+            
+            keepAliveInterval = setInterval(() => {
+                if (!vozDesbloqueada) return;
+                
+                // Pequeña acción que mantiene el JS activo
+                const ahora = new Date();
+                const segundos = ahora.getSeconds();
+                
+                // Cada 30 segundos forzar un pequeño "latido"
+                if (segundos === 0 || segundos === 30) {
+                    console.log("💓 Keep-alive pulse");
+                    
+                    // Reanudar AudioContext si está suspendido
+                    if (audioContext && audioContext.state === 'suspended') {
+                        audioContext.resume();
+                    }
+                    
+                    // Renovar Wake Lock si es necesario
+                    if (wakeLockSentinel === null || wakeLockSentinel.released) {
+                        solicitarWakeLock();
+                    }
+                }
+            }, 10000); // Cada 10 segundos verificar
+        }
+        
+        // Estrategia 4: Usar Web Worker (fondo)
+        function iniciarWebWorker() {
+            try {
+                const workerBlob = new Blob([`
+                    let intervalo = null;
+                    self.addEventListener('message', function(e) {
+                        if (e.data === 'start') {
+                            intervalo = setInterval(() => {
+                                self.postMessage('ping');
+                            }, 15000);
+                        } else if (e.data === 'stop') {
+                            if (intervalo) clearInterval(intervalo);
+                        }
+                    });
+                `], { type: 'application/javascript' });
+                
+                const worker = new Worker(URL.createObjectURL(workerBlob));
+                worker.onmessage = () => {
+                    console.log("💓 Worker heartbeat");
+                };
+                worker.postMessage('start');
+                return worker;
+            } catch(e) {
+                console.log("Worker no soportado");
+                return null;
+            }
+        }
+        
+        // ========== ACTIVAR TODO ==========
+        let workerActivo = null;
+        
+        async function activarConTacto() {
+            if (vozDesbloqueada) return;
+            
+            vozDesbloqueada = true;
+            
+            // Animación de salida
+            welcomeDiv.style.opacity = '0';
+            setTimeout(() => {
+                welcomeDiv.style.display = 'none';
+                relojDiv.classList.add('visible');
+            }, 800);
+            
+            // Mostrar mensaje de advertencia sobre limitaciones
+            warningStatus.style.display = 'block';
+            warningStatus.innerHTML = "⚠️ En algunos móviles, la pantalla apagada puede detener el reloj. Depende del fabricante.";
+            setTimeout(() => {
+                warningStatus.style.display = 'none';
+            }, 5000);
+            
+            // Iniciar todas las estrategias de keep-alive
+            setTimeout(async () => {
+                // 1. Wake Lock (mantiene pantalla)
+                await solicitarWakeLock();
+                
+                // 2. Sonido fantasma
+                iniciarSonidoFantasma();
+                
+                // 3. Keep-alive interval
+                iniciarKeepAlive();
+                
+                // 4. Web Worker
+                workerActivo = iniciarWebWorker();
+                
+                estadoDiv.innerText = "🎉 ACTIVADO - Modo fantasma + Wake Lock";
+                
+            }, 500);
+            
+            // Decir la hora al activar
+            setTimeout(() => {
+                decirHora();
+            }, 1000);
+        }
+        
+        // ========== RELOJ Y VOZ AUTOMÁTICA ==========
+        function actualizarRelojYHablar() {
+            const ahora = new Date();
+            horaPantalla.innerText = formatearHoraPantalla(ahora);
+            
+            if (!vozDesbloqueada) return;
+            
+            const minutosActuales = ahora.getMinutes();
+            const segundosActuales = ahora.getSeconds();
+            
+            // Detectar si estamos en un cuarto de hora (00, 15, 30, 45)
+            const esCuartoDeHora = [0, 15, 30, 45].includes(minutosActuales);
+            
+            if (esCuartoDeHora && segundosActuales === 0 && minutosActuales !== ultimoCuartoHabla) {
+                decirHora();
+                ultimoCuartoHabla = minutosActuales;
+                
+                // Mantener el contexto de audio vivo
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+                
+                // Renovar wake lock si es necesario
+                if (wakeLockSentinel && wakeLockSentinel.released) {
+                    solicitarWakeLock();
+                }
+            }
+        }
+        
+        // ========== EVENTOS ==========
+        welcomeDiv.addEventListener('click', activarConTacto);
+        welcomeDiv.addEventListener('touchstart', activarConTacto);
+        
+        // Pre-activar SpeechSynthesis
+        if ('speechSynthesis' in window) {
+            const silentUtterance = new SpeechSynthesisUtterance('');
+            silentUtterance.volume = 0;
+            window.speechSynthesis.speak(silentUtterance);
+        }
+        
+        // Iniciar reloj
+        setInterval(actualizarRelojYHablar, 1000);
+        actualizarRelojYHablar();
+        
+        // Recuperar audio si el navegador lo suspende
+        document.addEventListener('visibilitychange', () => {
+            if (!vozDesbloqueada) return;
+            
+            if (document.hidden) {
+                console.log("📱 Pantalla apagada - Manteniendo audio vivo");
+                // Asegurar que el audio sigue sonando
+                if (audioContext && audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+            } else {
+                console.log("📱 Pantalla encendida");
+            }
+        });
+        
+        // Prevenir scroll mientras se toca
+        document.body.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+        
+        // Info de compatibilidad
+        console.log("Wake Lock soportado:", 'wakeLock' in navigator);
+        console.log("Web Audio soportado:", !!(window.AudioContext || window.webkitAudioContext));
+    </script>
+</body>
+</html>
