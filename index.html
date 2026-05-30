@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reloj NFC - Audio con pantalla apagada</title>
+    <style>
+        body {
+            background: linear-gradient(135deg, #0b3b3f, #1a2a3a);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .reloj {
+            background: rgba(0,0,0,0.7);
+            padding: 2rem;
+            border-radius: 2rem;
+            max-width: 500px;
+        }
+        .hora {
+            font-size: 4rem;
+            font-family: monospace;
+            text-shadow: 0 0 10px #00ffcc;
+            margin: 20px 0;
+        }
+        button {
+            background: #2ecc71;
+            border: none;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-size: 1.1rem;
+            margin: 10px;
+            cursor: pointer;
+        }
+        .estado {
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="reloj">
+        <h1>🗣️ Reloj con Audio</h1>
+        <div class="hora" id="hora">--:--:--</div>
+        <div class="estado" id="estado">🔇 Audio inactivo</div>
+        <button id="btnActivar">🔊 ACTIVAR AUDIO (IMPORTANTE)</button>
+        <button id="btnProbar">🎤 PROBAR AHORA</button>
+        <p>✅ El audio seguirá sonando aunque apagues la pantalla</p>
+    </div>
+
+    <script>
+        let audioActivado = false;
+        let audioCtx = null;
+        let proximoTimeout = null;
+        
+        // Actualizar hora en pantalla
+        setInterval(() => {
+            const ahora = new Date();
+            document.getElementById('hora').innerHTML = ahora.toLocaleTimeString('es-ES');
+        }, 1000);
+        
+        // === TÉCNICA QUE FUNCIONA CON PANTALLA APAGADA ===
+        // Generar un "beep" usando Web Audio
+        function generarBeep(frecuencia = 880, duracion = 0.3) {
+            if (!audioCtx || !audioActivado) return;
+            
+            try {
+                // Reanudar contexto si está suspendido
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                osc.frequency.value = frecuencia;
+                gain.gain.value = 0.3;
+                
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duracion);
+                osc.stop(audioCtx.currentTime + duracion);
+                
+                console.log('🔊 Beep reproducido');
+            } catch(e) {
+                console.log('Error reproduciendo beep:', e);
+            }
+        }
+        
+        // Para voz (SpeechSynthesis) - esto SÍ funciona si el audio ya está activo
+        function hablar(texto) {
+            if (!audioActivado) return;
+            
+            // Asegurar que SpeechSynthesis funciona
+            window.speechSynthesis.cancel();
+            
+            const utterance = new SpeechSynthesisUtterance(texto);
+            utterance.lang = 'es-ES';
+            utterance.rate = 0.9;
+            utterance.volume = 1;
+            
+            // Pequeño beep antes de hablar (despierta el canal de audio)
+            generarBeep(440, 0.1);
+            
+            setTimeout(() => {
+                window.speechSynthesis.speak(utterance);
+            }, 150);
+        }
+        
+        // Texto de la hora
+        function obtenerTextoHora() {
+            const ahora = new Date();
+            let horas = ahora.getHours();
+            let minutos = ahora.getMinutes();
+            let hora12 = horas % 12;
+            if (hora12 === 0) hora12 = 12;
+            
+            if (minutos === 0) return `${hora12} en punto`;
+            if (minutos === 15) return `${hora12} y cuarto`;
+            if (minutos === 30) return `${hora12} y media`;
+            if (minutos === 45) {
+                let sig = (horas + 1) % 12;
+                if (sig === 0) sig = 12;
+                return `un cuarto para las ${sig}`;
+            }
+            return null;
+        }
+        
+        // === LO IMPORTANTE: Mantener AudioContext VIVO ===
+        function iniciarAudioPersistente() {
+            // Crear AudioContext
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            // TRUCO CRÍTICO: Crear un oscilador silencioso que corre indefinidamente
+            // Esto evita que el navegador suspenda el AudioContext
+            const silentOsc = audioCtx.createOscillator();
+            const silentGain = audioCtx.createGain();
+            silentGain.gain.value = 0; // Silencio total
+            silentOsc.connect(silentGain);
+            silentGain.connect(audioCtx.destination);
+            silentOsc.start();
+            
+            // También crear un bucle silencioso con ScriptProcessorNode (legacy pero efectivo)
+            try {
+                const bufferSize = 4096;
+                const scriptNode = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+                scriptNode.onaudioprocess = function(e) {
+                    // No hacer nada, solo mantener el contexto activo
+                };
+                scriptNode.connect(silentGain);
+            } catch(e) {
+                console.log('ScriptProcessor no soportado');
+            }
+            
+            // Reanudar contexto (requiere interacción del usuario)
+            audioCtx.resume();
+            
+            audioActivado = true;
+            
+            // Reproducir sonido de confirmación
+            setTimeout(() => {
+                generarBeep(660, 0.2);
+                generarBeep(880, 0.2);
+                hablar("Audio activado, recibiré la hora cada 15 minutos");
+            }, 100);
+            
+            document.getElementById('estado').innerHTML = '🔊 AUDIO ACTIVO - Funciona con pantalla apagada';
+            document.getElementById('estado').style.background = 'rgba(46,204,113,0.3)';
+            
+            // Iniciar el programador de cuartos de hora
+            programarProximoCuarto();
+        }
+        
+        // === PROGRAMADOR DE CUARTOS DE HORA ===
+        function programarProximoCuarto() {
+            if (proximoTimeout) clearTimeout(proximoTimeout);
+            
+            const ahora = new Date();
+            const minutos = ahora.getMinutes();
+            const segundos = ahora.getSeconds();
+            
+            let minutosFaltantes;
+            if (minutos < 15) minutosFaltantes = 15 - minutos;
+            else if (minutos < 30) minutosFaltantes = 30 - minutos;
+            else if (minutos < 45) minutosFaltantes = 45 - minutos;
+            else minutosFaltantes = 60 - minutos;
+            
+            // Si estamos exactamente en un cuarto y faltan 0 minutos, esperar al próximo
+            if (minutosFaltantes === 0 && segundos > 0) {
+                minutosFaltantes = 15;
+            }
+            
+            const msFaltantes = (minutosFaltantes * 60 - segundos) * 1000;
+            
+            console.log(`⏰ Próximo anuncio en ${minutosFaltantes} min ${Math.floor(msFaltantes / 1000) % 60} seg`);
+            document.getElementById('estado').innerHTML = `⏰ Próximo anuncio en ${minutosFaltantes} minutos`;
+            
+            proximoTimeout = setTimeout(() => {
+                const texto = obtenerTextoHora();
+                if (texto) {
+                    // Beep fuerte para despertar
+                    generarBeep(880, 0.2);
+                    setTimeout(() => hablar(texto), 200);
+                }
+                // Reprogramar siguiente
+                programarProximoCuarto();
+            }, msFaltantes);
+        }
+        
+        // Probar sonido ahora
+        function probarAhora() {
+            if (!audioActivado) {
+                alert('Primero presiona "ACTIVAR AUDIO"');
+                return;
+            }
+            generarBeep(880, 0.3);
+            setTimeout(() => {
+                const texto = obtenerTextoHora();
+                if (texto) hablar(texto);
+                else hablar(`Son las ${new Date().toLocaleTimeString()}`);
+            }, 150);
+        }
+        
+        // Eventos
+        document.getElementById('btnActivar').onclick = () => {
+            iniciarAudioPersistente();
+        };
+        
+        document.getElementById('btnProbar').onclick = () => {
+            probarAhora();
+        };
+        
+        console.log('✅ App lista - El audio persistente funciona con pantalla apagada');
+    </script>
+</body>
+</html>
