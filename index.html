@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Reloj NFC - Con Keep Alive de 30Hz</title>
+    <style>
+        * { user-select: none; box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #0b3b3f, #1a2a3a);
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 16px;
+        }
+        .container {
+            background: rgba(0,0,0,0.7);
+            padding: 2rem;
+            border-radius: 2rem;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        .hora { font-size: 4rem; font-family: monospace; text-shadow: 0 0 10px cyan; margin: 20px 0; }
+        .estado { background: rgba(0,0,0,0.5); padding: 10px; border-radius: 15px; margin: 10px 0; font-size: 0.9rem; }
+        button { background: #2ed573; border: none; color: black; padding: 15px 30px; border-radius: 50px; font-size: 1.2rem; font-weight: bold; margin: 10px; cursor: pointer; }
+        .badge { background: #f39c12; display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 0.7rem; }
+        select { background: rgba(0,0,0,0.7); color: white; padding: 8px; border-radius: 20px; margin: 10px; }
+        .info { font-size: 0.7rem; margin-top: 15px; opacity: 0.7; }
+        .status { background: #2ed57333; padding: 8px; border-radius: 10px; font-size: 0.7rem; margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="badge">🔊 KEEP ALIVE 30Hz (COMO TU RADIO)</div>
+    <h1>🗣️ Reloj NFC</h1>
+    <div class="hora" id="hora">--:--:--</div>
+    <select id="idioma">
+        <option value="es">🇪🇸 Español</option>
+        <option value="en">🇺🇸 English</option>
+        <option value="fr">🇫🇷 Français</option>
+        <option value="de">🇩🇪 Deutsch</option>
+        <option value="it">🇮🇹 Italiano</option>
+        <option value="pt">🇵🇹 Português</option>
+    </select>
+    <button id="activar">🎤 ACTIVAR (UN SOLO TOQUE)</button>
+    <div class="estado" id="estado">⚡ Presiona ACTIVAR</div>
+    <div class="status" id="status">🎵 Esperando...</div>
+    <div class="info">💡 Usa la MISMA técnica que tu radio (30Hz, volumen 0.001)</div>
+</div>
+
+<script>
+    // ============ COPIADO EXACTO DE TU RADIO ============
+    let activado = false;
+    let idioma = 'es';
+    let ultimoMinuto = -1;
+    
+    // Keep alive con 30Hz (como tu radio)
+    let keepAliveCtx = null;
+    let keepAliveOsc = null;
+    let keepAliveActivo = false;
+
+    function iniciarKeepAlive() {
+        if (keepAliveActivo) return;
+        
+        try {
+            keepAliveCtx = new (window.AudioContext || window.webkitAudioContext)();
+            keepAliveOsc = keepAliveCtx.createOscillator();
+            const gain = keepAliveCtx.createGain();
+            
+            keepAliveOsc.connect(gain);
+            gain.connect(keepAliveCtx.destination);
+            
+            keepAliveOsc.type = 'sine';
+            keepAliveOsc.frequency.value = 30;  // 30 Hz - como tu radio
+            gain.gain.value = 0.001;            // Volumen muy bajo
+            
+            keepAliveOsc.start();
+            keepAliveActivo = true;
+            
+            // Reanudar si el contexto se suspende
+            const reanudar = () => {
+                if (keepAliveCtx && keepAliveCtx.state === 'suspended') {
+                    keepAliveCtx.resume();
+                }
+            };
+            document.addEventListener('click', reanudar);
+            document.addEventListener('touchstart', reanudar);
+            
+            document.getElementById('status').innerHTML = '🎵 Keep alive 30Hz: ACTIVO ✅';
+            document.getElementById('status').style.background = '#2ed57355';
+            console.log('🔊 Keep alive local activado (30Hz, como tu radio)');
+        } catch(e) {
+            console.log("Keep alive no disponible:", e);
+            document.getElementById('status').innerHTML = '⚠️ Keep alive no disponible';
+        }
+    }
+
+    function detenerKeepAlive() {
+        if (keepAliveOsc) {
+            try {
+                keepAliveOsc.stop();
+                keepAliveCtx.close();
+            } catch(e) {}
+            keepAliveOsc = null;
+            keepAliveCtx = null;
+            keepAliveActivo = false;
+            console.log('🔇 Keep alive detenido');
+        }
+    }
+    
+    // ============ TEXTO HORA ============
+    function textoHora() {
+        const a = new Date();
+        let h = a.getHours(), m = a.getMinutes();
+        let h12 = h % 12 || 12;
+        const txt = {
+            es: () => {
+                if (m === 0) return `${h12} en punto`;
+                if (m === 15) return `${h12} y cuarto`;
+                if (m === 30) return `${h12} y media`;
+                if (m === 45) return `un cuarto para las ${(h+1)%12 || 12}`;
+                return `${h12} y ${m} minutos`;
+            },
+            en: () => { const ampm = h < 12 ? 'AM' : 'PM'; if(m===0) return `${h12} o'clock ${ampm}`; if(m===15) return `quarter past ${h12} ${ampm}`; if(m===30) return `half past ${h12} ${ampm}`; if(m===45) return `quarter to ${(h+1)%12||12} ${ampm}`; return `${h12} ${m} ${ampm}`; },
+            fr: () => { if(m===0) return `${h12} heures`; if(m===15) return `${h12} heures et quart`; if(m===30) return `${h12} heures et demie`; if(m===45) return `moins le quart ${(h+1)%12||12} heures`; return `${h12} heures ${m}`; },
+            de: () => { if(m===0) return `${h12} Uhr`; if(m===15) return `Viertel nach ${h12}`; if(m===30) return `halb ${h12+1}`; if(m===45) return `Viertel vor ${(h+1)%12||12}`; return `${h12} Uhr ${m}`; },
+            it: () => { if(m===0) return `${h12} in punto`; if(m===15) return `${h12} e un quarto`; if(m===30) return `${h12} e mezza`; if(m===45) return `un quarto alle ${(h+1)%12||12}`; return `${h12} e ${m} minuti`; },
+            pt: () => { if(m===0) return `${h12} em ponto`; if(m===15) return `${h12} e quinze`; if(m===30) return `${h12} e meia`; if(m===45) return `um quarto para as ${(h+1)%12||12}`; return `${h12} e ${m} minutos`; }
+        };
+        return txt[idioma] ? txt[idioma]() : txt.es();
+    }
+    
+    function hablar() {
+        if (!activado) return;
+        const t = textoHora();
+        const u = new SpeechSynthesisUtterance(t);
+        u.lang = {es:'es-ES',en:'en-US',fr:'fr-FR',de:'de-DE',it:'it-IT',pt:'pt-PT'}[idioma];
+        u.rate = 0.9;
+        document.getElementById('estado').innerHTML = `🗣️ "${t}"`;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+    }
+    
+    // ============ RELOJ ============
+    function tick() {
+        const a = new Date();
+        document.getElementById('hora').innerHTML = a.toLocaleTimeString('es-ES', { hour12: false });
+        if (!activado) return;
+        const m = a.getMinutes(), s = a.getSeconds();
+        if ([0, 15, 30, 45].includes(m) && s < 2 && m !== ultimoMinuto) {
+            hablar();
+            ultimoMinuto = m;
+        }
+    }
+    
+    // ============ ACTIVAR (COMO TU RADIO) ============
+    async function activar() {
+        if (activado) return;
+        document.getElementById('estado').innerHTML = "🔄 Activando keep alive...";
+        
+        // Iniciar keep alive (igual que tu radio)
+        iniciarKeepAlive();
+        
+        activado = true;
+        document.getElementById('estado').innerHTML = "✅ ACTIVADO - Funciona con pantalla apagada";
+        document.getElementById('estado').style.background = "#2ed57322";
+        document.getElementById('activar').style.display = 'none';
+        
+        setTimeout(() => hablar(), 500);
+        
+        // Guardar estado (como tu radio)
+        localStorage.setItem('relojActivo', 'true');
+        localStorage.setItem('relojIdioma', idioma);
+    }
+    
+    // ============ RECUPERAR AL RECARGAR (como tu radio) ============
+    function recuperarEstado() {
+        if (localStorage.getItem('relojActivo') === 'true') {
+            idioma = localStorage.getItem('relojIdioma') || 'es';
+            document.getElementById('idioma').value = idioma;
+            document.getElementById('activar').style.display = 'none';
+            setTimeout(() => {
+                activar();
+            }, 500);
+        }
+    }
+    
+    // ============ EVENTOS ============
+    document.getElementById('activar').onclick = activar;
+    document.getElementById('idioma').onchange = (e) => { 
+        idioma = e.target.value; 
+        localStorage.setItem('relojIdioma', idioma);
+    };
+    
+    // Precargar voz
+    if ('speechSynthesis' in window) {
+        const s = new SpeechSynthesisUtterance('');
+        s.volume = 0;
+        window.speechSynthesis.speak(s);
+    }
+    
+    // Iniciar reloj
+    setInterval(tick, 1000);
+    tick();
+    
+    // Recuperar estado al cargar
+    recuperarEstado();
+    
+    // Detectar cuando la pantalla se apaga (solo log)
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            console.log("📱 Pantalla apagada - Keep alive 30Hz activo");
+            // Asegurar que el keep alive sigue
+            if (keepAliveCtx && keepAliveCtx.state === 'suspended') {
+                keepAliveCtx.resume();
+            }
+        } else {
+            console.log("📱 Pantalla encendida");
+        }
+    });
+    
+    console.log("✅ Reloj listo - Usando la MISMA técnica que tu radio (30Hz)");
+</script>
+</body>
+</html>
