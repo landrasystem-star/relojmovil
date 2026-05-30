@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Reloj NFC - Pantalla tenue</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000000;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        /* Modo brillo mínimo (casi apagada) */
+        body.modo-apagado {
+            background: #000000;
+        }
+        
+        body.modo-apagado .reloj {
+            background: rgba(0,0,0,0.95);
+            box-shadow: none;
+        }
+        
+        body.modo-apagado .hora {
+            text-shadow: none;
+            opacity: 0.15;
+        }
+        
+        body.modo-apagado h1,
+        body.modo-apagado .badge,
+        body.modo-apagado .info,
+        body.modo-apagado .proximo,
+        body.modo-apagado button:not(#btnIluminar) {
+            opacity: 0.1;
+        }
+        
+        /* Solo el botón de iluminar se ve tenuemente */
+        body.modo-apagado #btnIluminar {
+            background: #333;
+            opacity: 0.3;
+        }
+        
+        /* Modo iluminado (normal) */
+        body.modo-iluminado .reloj {
+            background: rgba(0,0,0,0.8);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        }
+        
+        body.modo-iluminado .hora {
+            text-shadow: 0 0 10px #00ffcc;
+            opacity: 1;
+        }
+        
+        body.modo-iluminado h1,
+        body.modo-iluminado .badge,
+        body.modo-iluminado .info,
+        body.modo-iluminado .proximo,
+        body.modo-iluminado button {
+            opacity: 1;
+        }
+        
+        .reloj {
+            background: rgba(0,0,0,0.8);
+            padding: 2rem;
+            border-radius: 2rem;
+            max-width: 500px;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+        
+        .hora {
+            font-size: 4rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            margin: 20px 0;
+            transition: all 0.3s ease;
+        }
+        
+        .badge {
+            background: #27ae60;
+            color: black;
+            padding: 4px 12px;
+            border-radius: 30px;
+            display: inline-block;
+            margin-bottom: 10px;
+            font-size: 0.75rem;
+            font-weight: bold;
+        }
+        
+        button {
+            background: #e67e22;
+            border: none;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            font-size: 1rem;
+            font-weight: bold;
+            margin: 10px 5px;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.3s;
+        }
+        
+        button:active {
+            transform: scale(0.95);
+        }
+        
+        .btn-iluminar {
+            background: #2ecc71;
+            font-size: 1.2rem;
+            padding: 15px 30px;
+        }
+        
+        .btn-apagar {
+            background: #555;
+        }
+        
+        .info {
+            font-size: 0.7rem;
+            margin-top: 15px;
+            opacity: 0.7;
+        }
+        
+        .proximo {
+            background: rgba(255,255,0,0.15);
+            padding: 8px;
+            border-radius: 10px;
+            margin: 10px 0;
+            font-size: 0.8rem;
+        }
+        
+        .estado-brillo {
+            font-size: 0.7rem;
+            margin-top: 10px;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <div class="reloj">
+        <div class="badge">🔆 RELOJ NFC - MODO PANTALLA TENUE</div>
+        <h1>🗣️ Reloj que habla</h1>
+        <div class="hora" id="horaPantalla">--:--:--</div>
+        <div class="proximo" id="proximo">⏱️ Próximo anuncio: --</div>
+        <div class="estado-brillo" id="estadoBrillo">💡 Modo: NORMAL</div>
+        
+        <button id="btnIluminar" class="btn-iluminar">💡 TOCAR PARA ILUMINAR</button>
+        <button id="btnProbar">🔊 PROBAR HORA</button>
+        
+        <div class="info">
+            🔆 Pantalla en BRILLO MÍNIMO (casi apagada) pero el reloj sigue funcionando<br>
+            👆 Toca la pantalla para ILUMINAR y ver la hora<br>
+            ⏰ Anuncia cada 15 minutos (en punto, y cuarto, y media, menos cuarto)<br>
+            🔋 Consumo mínimo - Ideal para dejar funcionando toda la noche
+        </div>
+    </div>
+
+    <script>
+        // ============================================
+        // SISTEMA DE CONTROL DE PANTALLA
+        // ============================================
+        
+        let modoApagado = false;
+        let timeoutApagado = null;
+        let wakeLock = null;
+        
+        const body = document.body;
+        const estadoBrillo = document.getElementById('estadoBrillo');
+        const btnIluminar = document.getElementById('btnIluminar');
+        const btnProbar = document.getElementById('btnProbar');
+        const horaPantalla = document.getElementById('horaPantalla');
+        const proximoElem = document.getElementById('proximo');
+        
+        // === 1. ACTIVAR MODO ILUMINADO (brillo normal) ===
+        function modoIluminado() {
+            if (timeoutApagado) clearTimeout(timeoutApagado);
+            
+            body.classList.remove('modo-apagado');
+            body.classList.add('modo-iluminado');
+            modoApagado = false;
+            estadoBrillo.innerHTML = '💡 Modo: ILUMINADO';
+            estadoBrillo.style.color = '#2ecc71';
+            
+            // Programar vuelta a modo apagado después de 10 segundos de inactividad
+            timeoutApagado = setTimeout(() => {
+                modoApagadoPantalla();
+            }, 10000);
+        }
+        
+        // === 2. ACTIVAR MODO APAGADO (brillo mínimo) ===
+        function modoApagadoPantalla() {
+            body.classList.remove('modo-iluminado');
+            body.classList.add('modo-apagado');
+            modoApagado = true;
+            estadoBrillo.innerHTML = '🔆 Modo: PANTALLA TENUE (ahorro)';
+            estadoBrillo.style.color = '#aaa';
+        }
+        
+        // === 3. WAKE LOCK - Evita que la pantalla se apague del todo ===
+        async function solicitarWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('✅ Wake Lock activado - Pantalla no se apagará');
+                    
+                    wakeLock.addEventListener('release', () => {
+                        console.log('⚠️ Wake Lock liberado');
+                    });
+                    
+                    return true;
+                }
+            } catch (err) {
+                console.log(`❌ Wake Lock no soportado: ${err}`);
+            }
+            return false;
+        }
+        
+        // === 4. VERIFICAR Y MANTENER WAKE LOCK ===
+        async function mantenerWakeLock() {
+            if (wakeLock === null) {
+                await solicitarWakeLock();
+            }
+            
+            // Re-adquirir si se perdió (por ejemplo al cambiar de pestaña)
+            document.addEventListener('visibilitychange', async () => {
+                if (wakeLock !== null && document.visibilityState === 'visible') {
+                    await solicitarWakeLock();
+                }
+            });
+        }
+        
+        // ============================================
+        // RELOJ Y ANUNCIOS
+        // ============================================
+        
+        let ultimoMinutoAnunciado = -1;
+        let audioCtx = null;
+        let modoAudioActivado = false;
+        
+        // Actualizar hora en pantalla
+        function actualizarPantalla() {
+            const ahora = new Date();
+            horaPantalla.innerHTML = ahora.toLocaleTimeString('es-ES', { hour12: false });
+            
+            // Calcular próximo cuarto
+            const minutos = ahora.getMinutes();
+            let minutosFaltantes;
+            if (minutos < 15) minutosFaltantes = 15 - minutos;
+            else if (minutos < 30) minutosFaltantes = 30 - minutos;
+            else if (minutos < 45) minutosFaltantes = 45 - minutos;
+            else minutosFaltantes = 60 - minutos;
+            
+            if (minutosFaltantes === 0) minutosFaltantes = 15;
+            
+            proximoElem.innerHTML = `⏱️ Próximo anuncio en: ${minutosFaltantes} minutos`;
+        }
+        
+        // Texto de la hora
+        function obtenerTextoHora() {
+            const ahora = new Date();
+            let horas = ahora.getHours();
+            let minutos = ahora.getMinutes();
+            let hora12 = horas % 12;
+            if (hora12 === 0) hora12 = 12;
+            
+            if (minutos === 0) return `${hora12} en punto`;
+            if (minutos === 15) return `${hora12} y cuarto`;
+            if (minutos === 30) return `${hora12} y media`;
+            if (minutos === 45) {
+                let sig = (horas + 1) % 12;
+                if (sig === 0) sig = 12;
+                return `un cuarto para las ${sig}`;
+            }
+            return null;
+        }
+        
+        // Inicializar AudioContext persistente
+        function initAudioPersistente() {
+            if (modoAudioActivado) return;
+            
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioCtx();
+                
+                // Oscilador silencioso infinito - mantiene el audio vivo
+                const silentOsc = audioCtx.createOscillator();
+                const silentGain = audioCtx.createGain();
+                silentGain.gain.value = 0;
+                silentOsc.connect(silentGain);
+                silentGain.connect(audioCtx.destination);
+                silentOsc.start();
+                
+                audioCtx.resume();
+                modoAudioActivado = true;
+                console.log('🎵 Audio persistente activado');
+            } catch(e) {
+                console.log('AudioContext no disponible');
+            }
+        }
+        
+        // Beep de alerta
+        function beep(frecuencia = 880, duracion = 0.2) {
+            if (!audioCtx) return;
+            
+            try {
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+                
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = frecuencia;
+                gain.gain.value = 0.2;
+                osc.start();
+                gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duracion);
+                osc.stop(audioCtx.currentTime + duracion);
+            } catch(e) {}
+        }
+        
+        // Anunciar hora
+        function anunciarHora() {
+            const texto = obtenerTextoHora();
+            if (!texto) return;
+            
+            console.log(`🗣️ Anunciando: "${texto}"`);
+            
+            // Iluminar pantalla al anunciar
+            modoIluminado();
+            
+            // Beep antes de hablar
+            beep(880, 0.15);
+            
+            setTimeout(() => {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(texto);
+                utterance.lang = 'es-ES';
+                utterance.rate = 0.9;
+                utterance.volume = 1;
+                window.speechSynthesis.speak(utterance);
+            }, 150);
+        }
+        
+        // Verificar cuartos de hora
+        function verificarCuarto() {
+            const ahora = new Date();
+            const minutos = ahora.getMinutes();
+            const segundos = ahora.getSeconds();
+            const esCuarto = [0, 15, 30, 45].includes(minutos);
+            
+            if (esCuarto && segundos === 0 && minutos !== ultimoMinutoAnunciado) {
+                anunciarHora();
+                ultimoMinutoAnunciado = minutos;
+            }
+        }
+        
+        // Probar hora manualmente
+        function probarHora() {
+            initAudioPersistente();
+            modoIluminado();
+            
+            const ahora = new Date();
+            const texto = obtenerTextoHora();
+            if (texto) {
+                beep(880, 0.15);
+                setTimeout(() => {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(texto);
+                    utterance.lang = 'es-ES';
+                    utterance.rate = 0.9;
+                    window.speechSynthesis.speak(utterance);
+                }, 150);
+            } else {
+                beep(660, 0.15);
+                setTimeout(() => {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(`Son las ${ahora.toLocaleTimeString()}`);
+                    utterance.lang = 'es-ES';
+                    window.speechSynthesis.speak(utterance);
+                }, 150);
+            }
+        }
+        
+        // ============================================
+        // INICIALIZACIÓN
+        // ============================================
+        
+        function iniciar() {
+            // Actualizar pantalla cada segundo
+            setInterval(() => {
+                actualizarPantalla();
+                verificarCuarto();
+            }, 1000);
+            
+            // Solicitar Wake Lock para que la pantalla no se apague
+            mantenerWakeLock();
+            
+            // Iniciar modo apagado después de 5 segundos
+            setTimeout(() => {
+                modoApagadoPantalla();
+            }, 5000);
+            
+            // Tocar cualquier parte de la pantalla ilumina
+            document.addEventListener('click', () => {
+                modoIluminado();
+            });
+            
+            document.addEventListener('touchstart', () => {
+                modoIluminado();
+            });
+            
+            // Inicializar audio cuando el usuario toque
+            const initAudioOnFirstTouch = () => {
+                initAudioPersistente();
+                document.removeEventListener('touchstart', initAudioOnFirstTouch);
+                document.removeEventListener('click', initAudioOnFirstTouch);
+            };
+            
+            document.addEventListener('touchstart', initAudioOnFirstTouch);
+            document.addEventListener('click', initAudioOnFirstTouch);
+            
+            // Botón iluminar
+            btnIluminar.onclick = () => {
+                modoIluminado();
+                initAudioPersistente();
+            };
+            
+            btnProbar.onclick = () => {
+                probarHora();
+            };
+            
+            console.log('🚀 Reloj iniciado - Pantalla en brillo mínimo');
+        }
+        
+        iniciar();
+    </script>
+</body>
+</html>
